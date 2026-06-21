@@ -1,5 +1,3 @@
-import OpenAI from "openai";
-
 const SOURCES = {
   kospiRise: "https://finance.naver.com/sise/sise_rise.naver?sosok=0",
   kosdaqRise: "https://finance.naver.com/sise/sise_rise.naver?sosok=1",
@@ -12,16 +10,10 @@ const BLOCK_WORDS = [
   "ETF", "ETN", "레버리지", "인버스", "선물", "스팩", "SPAC", "리츠", "채권", "국채", "나스닥", "S&P"
 ];
 
-const FLIGHTS = [
-  ["칭다오", "https://www.skyscanner.co.kr/transport/flights/icn/tao/?adults=1&adultsv2=1&cabinclass=economy&rtn=0"],
-  ["후쿠오카", "https://www.skyscanner.co.kr/transport/flights/icn/fuk/?adults=1&adultsv2=1&cabinclass=economy&rtn=0"],
-  ["다낭", "https://www.skyscanner.co.kr/transport/flights/icn/dad/?adults=1&adultsv2=1&cabinclass=economy&rtn=0"]
-];
-
 const NEWS = [
-  ["AI", "AI 반도체 생성형 AI 한국 증시"],
-  ["바이오", "바이오 제약 임상 FDA 한국 증시"],
-  ["소재", "소재 2차전지 반도체 소재 희토류 한국 증시"]
+  ["🔬 AI", "AI 반도체 생성형 AI 한국 증시"],
+  ["🧬 바이오", "바이오 제약 임상 FDA 한국 증시"],
+  ["⚙️ 소재", "소재 2차전지 반도체 소재 희토류 한국 증시"]
 ];
 
 function kst() {
@@ -47,56 +39,68 @@ function isCompany(name) {
 }
 
 async function getText(url, enc = "utf-8") {
-  const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!r.ok) throw new Error(`fetch failed ${r.status}`);
-  const b = await r.arrayBuffer();
-  return new TextDecoder(enc).decode(b);
+  const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 MorningBriefBot" } });
+  if (!response.ok) throw new Error(`fetch failed ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  return new TextDecoder(enc).decode(buffer);
 }
 
-function parseStocks(html) {
+function parseStocks(html, mode = "rise") {
   const rows = html.split("<tr");
   const items = [];
   const seen = new Set();
 
   for (const row of rows) {
-    const code = row.match(/code=(\d{6})/);
+    const codeMatch = row.match(/code=(\d{6})/);
     const nameMatch = row.match(/class="tltle"[^>]*>([\s\S]*?)<\/a>/);
-    if (!code || !nameMatch) continue;
+    if (!codeMatch || !nameMatch) continue;
 
+    const code = codeMatch[1];
     const name = clean(nameMatch[1]);
-    if (!isCompany(name) || seen.has(code[1])) continue;
+    if (!isCompany(name) || seen.has(code)) continue;
 
     const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => clean(m[1])).filter(Boolean);
     const pct = cells.find((x) => x.includes("%")) || "";
-    const price = cells.find((x) => /^[0-9,]+$/.test(x)) || "";
 
-    seen.add(code[1]);
-    items.push({ name, code: code[1], price, pct, link: `https://finance.naver.com/item/main.naver?code=${code[1]}` });
+    seen.add(code);
+    items.push({
+      name,
+      code,
+      pct: mode === "rise" ? pct : "",
+      link: `https://finance.naver.com/item/main.naver?code=${code}`
+    });
+
     if (items.length >= 5) break;
   }
   return items;
 }
 
-async function stockBlock(label, url) {
+async function stockBlock(label, url, mode) {
   try {
     const html = await getText(url, "euc-kr");
-    const items = parseStocks(html);
-    if (!items.length) return `${label}\n- 종목 추출 실패. 직접 확인: ${url}`;
-    return `${label}\n` + items.map((x, i) => `${i + 1}. ${x.name}${x.pct ? ` ${x.pct}` : ""}\n   ${x.link}`).join("\n");
-  } catch (e) {
-    return `${label}\n- 조회 실패. 직접 확인: ${url}`;
+    const items = parseStocks(html, mode);
+    if (!items.length) return `${label}\n- 종목 추출 실패: ${url}`;
+    return `${label}\n` + items.map((x, i) => {
+      const extra = x.pct ? ` ${x.pct}` : "";
+      return `${i + 1}. ${x.name}${extra}\n   ${x.link}`;
+    }).join("\n");
+  } catch (error) {
+    return `${label}\n- 조회 실패: ${url}`;
   }
 }
 
-function newsSearchUrl(q) {
-  return `https://news.google.com/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`;
+function newsSearchUrl(query) {
+  return `https://news.google.com/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
 }
 
-function firstNews(xml, query) {
+function parseFirstNews(xml, query) {
   const item = xml.match(/<item>[\s\S]*?<\/item>/)?.[0];
   if (!item) return { title: `${query} 뉴스 검색`, link: newsSearchUrl(query) };
-  const title = clean(item.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/)?.[1] || item.match(/<title>([\s\S]*?)<\/title>/)?.[1] || `${query} 뉴스 검색`);
-  const link = clean(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] || newsSearchUrl(query));
+
+  const titleMatch = item.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/);
+  const linkMatch = item.match(/<link>([\s\S]*?)<\/link>/);
+  const title = clean((titleMatch && (titleMatch[1] || titleMatch[2])) || `${query} 뉴스 검색`);
+  const link = clean((linkMatch && linkMatch[1]) || newsSearchUrl(query));
   return { title, link };
 }
 
@@ -104,51 +108,48 @@ async function newsBlock(label, query) {
   try {
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
     const xml = await getText(url, "utf-8");
-    const n = firstNews(xml, query);
-    return `${label}\n${n.title}\n${n.link}`;
-  } catch (e) {
-    return `${label}\n${query} 뉴스 검색\n${newsSearchUrl(query)}`;
+    const item = parseFirstNews(xml, query);
+    return `${label}\n${item.title}\n기사보기: ${item.link}`;
+  } catch (error) {
+    return `${label}\n${query} 뉴스 검색\n기사보기: ${newsSearchUrl(query)}`;
   }
 }
 
 async function sendTelegram(text) {
   const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const r = await fetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true })
   });
-  if (!r.ok) throw new Error(await r.text());
+  if (!response.ok) throw new Error(await response.text());
 }
 
-async function buildBriefing() {
-  const [kr, krq, kv, kqv, ai, bio, mat] = await Promise.all([
-    stockBlock("📈 코스피 급등 5", SOURCES.kospiRise),
-    stockBlock("📈 코스닥 급등 5", SOURCES.kosdaqRise),
-    stockBlock("💰 코스피 거래상위 5", SOURCES.kospiVolume),
-    stockBlock("💰 코스닥 거래상위 5", SOURCES.kosdaqVolume),
-    newsBlock("🔬 AI", NEWS[0][1]),
-    newsBlock("🧬 바이오", NEWS[1][1]),
-    newsBlock("⚙️ 소재", NEWS[2][1])
+async function buildMessage() {
+  const [kospiRise, kosdaqRise, kospiVolume, kosdaqVolume, ai, bio, material] = await Promise.all([
+    stockBlock("📈 코스피 급등 TOP5", SOURCES.kospiRise, "rise"),
+    stockBlock("📈 코스닥 급등 TOP5", SOURCES.kosdaqRise, "rise"),
+    stockBlock("💰 코스피 거래상위 TOP5", SOURCES.kospiVolume, "volume"),
+    stockBlock("💰 코스닥 거래상위 TOP5", SOURCES.kosdaqVolume, "volume"),
+    newsBlock(NEWS[0][0], NEWS[0][1]),
+    newsBlock(NEWS[1][0], NEWS[1][1]),
+    newsBlock(NEWS[2][0], NEWS[2][1])
   ]);
 
-  const flights = "✈️ 항공권 특가 확인\n" + FLIGHTS.map(([name, link]) => `- ${name}: ${link}`).join("\n");
-  const raw = `${kr}\n\n${krq}\n\n${kv}\n\n${kqv}\n\n${ai}\n\n${bio}\n\n${mat}\n\n${flights}`;
-
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const response = await openai.responses.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-    max_output_tokens: 1200,
-    input: `아래 원자료를 텔레그램 아침 브리핑으로 정리해. 원자료의 종목명과 링크는 유지하고, ETF/ETN/레버리지/인버스/선물/스팩은 제외하려고 필터링했다는 점을 짧게 표시해. 투자 권유처럼 말하지 말고 참고용이라고 표시. 너무 길게 설명하지 말고 목록 중심으로 작성.\n\n${raw}`
-  });
-  return response.output_text;
+  return `🌅 아침 브리핑\n실행 시각: ${kst()}\n\n` +
+    `※ 네이버 금융 기준이며 장중 변동·지연 가능. ETF/ETN/레버리지/인버스/선물/스팩 등은 제외 시도. 투자 참고용.\n\n` +
+    `${kospiRise}\n\n${kosdaqRise}\n\n${kospiVolume}\n\n${kosdaqVolume}\n\n` +
+    `📰 관심 섹터 뉴스\n\n${ai}\n\n${bio}\n\n${material}\n\n` +
+    `투자 전 공식 경로에서 반드시 재확인.`;
 }
 
 export default async function handler(req, res) {
   try {
-    if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID || !process.env.OPENAI_API_KEY) throw new Error("Missing environment variables");
-    const briefing = await buildBriefing();
-    await sendTelegram(`🌅 아침 브리핑\n실행 시각: ${kst()}\n\n${briefing}\n\n투자·예약 전 공식 경로에서 반드시 재확인.`);
+    if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+      throw new Error("Missing Telegram environment variables");
+    }
+    const message = await buildMessage();
+    await sendTelegram(message);
     res.status(200).json({ ok: true, sent: true });
   } catch (error) {
     console.error(error);
