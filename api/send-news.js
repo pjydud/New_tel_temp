@@ -6,24 +6,20 @@ export default async function handler(req, res) {
 
     const response = await openai.responses.create({
       model: "gpt-4.1-mini",
-      input: `오늘 기준 대한민국 주요뉴스 5개와 AI/기술뉴스 5개를 한국어로 요약해줘.
+      input: `한국 주식시장 개장 후 기준으로 전일 종가 대비 10% 이상 상승한 코스피 또는 코스닥 종목 중 거래가 활발한 종목 최대 5개만 정리해줘.
 
-형식:
-📰 오늘의 주요 뉴스
+각 종목별로:
+- 종목명
+- 상승률
+- 급등 사유 추정 2줄 이내
 
-[국내 뉴스]
-1. 제목
-- 핵심 요약 2문장
-
-[AI/기술 뉴스]
-1. 제목
-- 핵심 요약 2문장`,
-      tools: [{ type: "web_search_preview" }]
+불필요한 설명 없이 간결하게 작성.
+해당 종목이 거의 없으면 있는 종목만 작성.`
     });
 
     const telegramUrl = "https://api.telegram.org" + "/bot" + process.env.TELEGRAM_BOT_TOKEN + "/sendMessage";
 
-    const telegramResponse = await fetch(telegramUrl, {
+    await fetch(telegramUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -31,11 +27,6 @@ export default async function handler(req, res) {
         text: response.output_text
       })
     });
-
-    if (!telegramResponse.ok) {
-      const text = await telegramResponse.text();
-      throw new Error("Telegram send failed: " + text);
-    }
 
     res.status(200).json({ ok: true });
   } catch (error) {
