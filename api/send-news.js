@@ -9,15 +9,15 @@ const BLOCK_WORDS = [
 ];
 
 const PEOPLE_NEWS = [
-  ["권칠승 국회의원", "권칠승 국회의원"],
-  ["경기도의원 이진형", "경기도의원 이진형"],
-  ["경기도의원 김회철", "경기도의원 김회철"],
-  ["화성시의원 위영란", "화성시의원 위영란"],
-  ["화성시의원 배현경", "화성시의원 배현경"],
-  ["화성시의원 최태양", "화성시의원 최태양"],
-  ["화성시의원 유상희", "화성시의원 유상희"],
-  ["화성시의원 장철규", "화성시의원 장철규"],
-  ["화성시의원 김창겸", "화성시의원 김창겸"]
+  { label: "권칠승 국회의원", name: "권칠승", queries: ["권칠승", "권칠승 국회의원", "권칠승 의원"] },
+  { label: "경기도의원 이진형", name: "이진형", queries: ["이진형 경기도의원", "이진형 의원"] },
+  { label: "경기도의원 김회철", name: "김회철", queries: ["김회철 경기도의원", "김회철 의원"] },
+  { label: "화성시의원 위영란", name: "위영란", queries: ["위영란 화성시의원", "위영란 의원"] },
+  { label: "화성시의원 배현경", name: "배현경", queries: ["배현경 화성시의원", "배현경 의원"] },
+  { label: "화성시의원 최태양", name: "최태양", queries: ["최태양 화성시의원", "최태양 의원"] },
+  { label: "화성시의원 유상희", name: "유상희", queries: ["유상희 화성시의원", "유상희 의원"] },
+  { label: "화성시의원 장철규", name: "장철규", queries: ["장철규 화성시의원", "장철규 의원"] },
+  { label: "화성시의원 김창겸", name: "김창겸", queries: ["김창겸 화성시의원", "김창겸 의원"] }
 ];
 
 const HWASEONG_POLICY_QUERIES = [
@@ -104,10 +104,6 @@ async function stockBlock(label, url) {
   }
 }
 
-function newsSearchUrl(query) {
-  return `https://news.google.com/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
-}
-
 function getKstDateParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Seoul",
@@ -169,12 +165,13 @@ function parseNewsItems(xml, query, limit = 1, options = {}) {
     const pubDateMatch = itemXml.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
     const pubDate = clean((pubDateMatch && pubDateMatch[1]) || "");
     const title = clean((titleMatch && (titleMatch[1] || titleMatch[2])) || `${query} 뉴스 검색`);
-    const link = clean((linkMatch && linkMatch[1]) || newsSearchUrl(query));
+    const link = clean((linkMatch && linkMatch[1]) || `https://news.google.com/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`);
 
     if (!title) continue;
     if (options.daysBack && !isWithinKstDays(pubDate, options.daysBack)) continue;
     if (options.excludeSoftNews && shouldExcludeNews(title)) continue;
     if (options.hwaseongPolicyOnly && !isHwaseongPolicyNews(title)) continue;
+    if (options.requiredName && !title.includes(options.requiredName)) continue;
 
     items.push({ title, link, pubDate });
     if (items.length >= limit) break;
@@ -182,14 +179,29 @@ function parseNewsItems(xml, query, limit = 1, options = {}) {
   return items;
 }
 
-async function personNewsBlock(label, query) {
+async function personNewsBlock(person) {
   try {
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
-    const xml = await getText(url, "utf-8");
-    const items = parseNewsItems(xml, query, 1, { daysBack: 7 });
-    if (!items.length) return "";
-    const item = items[0];
-    return `📰 ${label}\n- ${item.title}\n  작성일: ${formatKstDateTime(item.pubDate)}\n  ${item.link}`;
+    const collected = [];
+    const seenLinks = new Set();
+    const seenTitles = new Set();
+
+    for (const query of person.queries) {
+      const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
+      const xml = await getText(url, "utf-8");
+      const items = parseNewsItems(xml, query, 3, { daysBack: 7, requiredName: person.name });
+      for (const item of items) {
+        const titleKey = item.title.replace(/\s+/g, "").slice(0, 50);
+        if (seenLinks.has(item.link) || seenTitles.has(titleKey)) continue;
+        seenLinks.add(item.link);
+        seenTitles.add(titleKey);
+        collected.push(item);
+      }
+    }
+
+    if (!collected.length) return "";
+    collected.sort((a, b) => Date.parse(b.pubDate || "") - Date.parse(a.pubDate || ""));
+    const item = collected[0];
+    return `📰 ${person.label}\n- ${item.title}\n  작성일: ${formatKstDateTime(item.pubDate)}\n  ${item.link}`;
   } catch (error) {
     return "";
   }
@@ -247,12 +259,12 @@ async function buildMessage() {
   const [kospiVolume, kosdaqVolume, peopleBlocksRaw, hwaseongNews] = await Promise.all([
     stockBlock("💰 코스피 거래상위 TOP5", SOURCES.kospiVolume),
     stockBlock("💰 코스닥 거래상위 TOP5", SOURCES.kosdaqVolume),
-    Promise.all(PEOPLE_NEWS.map(([label, query]) => personNewsBlock(label, query))),
+    Promise.all(PEOPLE_NEWS.map((person) => personNewsBlock(person))),
     hwaseongNewsBlock()
   ]);
 
   const peopleBlocks = peopleBlocksRaw.filter(Boolean);
-  const peopleSection = peopleBlocks.length ? `🗞️ 인물별 최근 뉴스\n최근 7일 작성 기사만 표시\n\n${peopleBlocks.join("\n\n")}\n\n` : "";
+  const peopleSection = peopleBlocks.length ? `🗞️ 인물별 최근 뉴스\n최근 7일 작성 기사 중 제목에 해당 인물 이름이 포함된 기사만 표시\n\n${peopleBlocks.join("\n\n")}\n\n` : "";
   const hwaseongSection = hwaseongNews ? `${hwaseongNews}\n\n` : "";
 
   return `🌅 아침 브리핑\n실행 시각: ${kst()}\n\n` +
