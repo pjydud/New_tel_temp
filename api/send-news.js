@@ -1,6 +1,4 @@
 const SOURCES = {
-  kospiRise: "https://finance.naver.com/sise/sise_rise.naver?sosok=0",
-  kosdaqRise: "https://finance.naver.com/sise/sise_rise.naver?sosok=1",
   kospiVolume: "https://finance.naver.com/sise/sise_quant.naver?sosok=0",
   kosdaqVolume: "https://finance.naver.com/sise/sise_quant.naver?sosok=1"
 };
@@ -10,10 +8,16 @@ const BLOCK_WORDS = [
   "ETF", "ETN", "레버리지", "인버스", "선물", "스팩", "SPAC", "리츠", "채권", "국채", "나스닥", "S&P"
 ];
 
-const NEWS = [
-  ["🔬 AI", "AI 반도체 생성형 AI 한국 증시"],
-  ["🧬 바이오", "바이오 제약 임상 FDA 한국 증시"],
-  ["⚙️ 소재", "소재 2차전지 반도체 소재 희토류 한국 증시"]
+const PEOPLE_NEWS = [
+  ["권칠승 국회의원", "권칠승 국회의원"],
+  ["경기도의원 이진형", "경기도의원 이진형"],
+  ["경기도의원 김회철", "경기도의원 김회철"],
+  ["화성시의원 위영란", "화성시의원 위영란"],
+  ["화성시의원 배현경", "화성시의원 배현경"],
+  ["화성시의원 최태양", "화성시의원 최태양"],
+  ["화성시의원 유상희", "화성시의원 유상희"],
+  ["화성시의원 장철규", "화성시의원 장철규"],
+  ["화성시의원 김창겸", "화성시의원 김창겸"]
 ];
 
 function kst() {
@@ -45,7 +49,7 @@ async function getText(url, enc = "utf-8") {
   return new TextDecoder(enc).decode(buffer);
 }
 
-function parseStocks(html, mode = "rise") {
+function parseStocks(html) {
   const rows = html.split("<tr");
   const items = [];
   const seen = new Set();
@@ -59,33 +63,22 @@ function parseStocks(html, mode = "rise") {
     const name = clean(nameMatch[1]);
     if (!isCompany(name) || seen.has(code)) continue;
 
-    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => clean(m[1])).filter(Boolean);
-    const pct = cells.find((x) => x.includes("%")) || "";
-
     seen.add(code);
-    items.push({
-      name,
-      code,
-      pct: mode === "rise" ? pct : "",
-      link: `https://finance.naver.com/item/main.naver?code=${code}`
-    });
+    items.push({ name, code });
 
     if (items.length >= 5) break;
   }
   return items;
 }
 
-async function stockBlock(label, url, mode) {
+async function stockBlock(label, url) {
   try {
     const html = await getText(url, "euc-kr");
-    const items = parseStocks(html, mode);
-    if (!items.length) return `${label}\n- 종목 추출 실패: ${url}`;
-    return `${label}\n` + items.map((x, i) => {
-      const extra = x.pct ? ` ${x.pct}` : "";
-      return `${i + 1}. ${x.name}${extra}\n   ${x.link}`;
-    }).join("\n");
+    const items = parseStocks(html);
+    if (!items.length) return `${label}\n- 종목 추출 실패`;
+    return `${label}\n` + items.map((x, i) => `${i + 1}. ${x.name} (${x.code})`).join("\n");
   } catch (error) {
-    return `${label}\n- 조회 실패: ${url}`;
+    return `${label}\n- 조회 실패`;
   }
 }
 
@@ -93,25 +86,40 @@ function newsSearchUrl(query) {
   return `https://news.google.com/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
 }
 
-function parseFirstNews(xml, query) {
-  const item = xml.match(/<item>[\s\S]*?<\/item>/)?.[0];
-  if (!item) return { title: `${query} 뉴스 검색`, link: newsSearchUrl(query) };
-
-  const titleMatch = item.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/);
-  const linkMatch = item.match(/<link>([\s\S]*?)<\/link>/);
-  const title = clean((titleMatch && (titleMatch[1] || titleMatch[2])) || `${query} 뉴스 검색`);
-  const link = clean((linkMatch && linkMatch[1]) || newsSearchUrl(query));
-  return { title, link };
+function parseNewsItems(xml, query, limit = 1) {
+  const matches = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+  return matches.slice(0, limit).map((itemXml) => {
+    const titleMatch = itemXml.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/);
+    const linkMatch = itemXml.match(/<link>([\s\S]*?)<\/link>/);
+    return {
+      title: clean((titleMatch && (titleMatch[1] || titleMatch[2])) || `${query} 뉴스 검색`),
+      link: clean((linkMatch && linkMatch[1]) || newsSearchUrl(query))
+    };
+  });
 }
 
 async function newsBlock(label, query) {
   try {
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
     const xml = await getText(url, "utf-8");
-    const item = parseFirstNews(xml, query);
-    return `${label}\n${item.title}\n기사보기: ${item.link}`;
+    const items = parseNewsItems(xml, query, 1);
+    if (!items.length) return `${label}\n- 검색 결과 없음`;
+    return `${label}\n- ${items[0].title}`;
   } catch (error) {
-    return `${label}\n${query} 뉴스 검색\n기사보기: ${newsSearchUrl(query)}`;
+    return `${label}\n- 조회 실패`;
+  }
+}
+
+async function hwaseongNewsBlock() {
+  const query = "화성시 주요뉴스";
+  try {
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
+    const xml = await getText(url, "utf-8");
+    const items = parseNewsItems(xml, query, 3);
+    if (!items.length) return "🏙️ 화성시 주요뉴스 3개\n- 검색 결과 없음";
+    return "🏙️ 화성시 주요뉴스 3개\n" + items.map((x, i) => `${i + 1}. ${x.title}`).join("\n");
+  } catch (error) {
+    return "🏙️ 화성시 주요뉴스 3개\n- 조회 실패";
   }
 }
 
@@ -126,20 +134,18 @@ async function sendTelegram(text) {
 }
 
 async function buildMessage() {
-  const [kospiRise, kosdaqRise, kospiVolume, kosdaqVolume, ai, bio, material] = await Promise.all([
-    stockBlock("📈 코스피 급등 TOP5", SOURCES.kospiRise, "rise"),
-    stockBlock("📈 코스닥 급등 TOP5", SOURCES.kosdaqRise, "rise"),
-    stockBlock("💰 코스피 거래상위 TOP5", SOURCES.kospiVolume, "volume"),
-    stockBlock("💰 코스닥 거래상위 TOP5", SOURCES.kosdaqVolume, "volume"),
-    newsBlock(NEWS[0][0], NEWS[0][1]),
-    newsBlock(NEWS[1][0], NEWS[1][1]),
-    newsBlock(NEWS[2][0], NEWS[2][1])
+  const [kospiVolume, kosdaqVolume, peopleBlocks, hwaseongNews] = await Promise.all([
+    stockBlock("💰 코스피 거래상위 TOP5", SOURCES.kospiVolume),
+    stockBlock("💰 코스닥 거래상위 TOP5", SOURCES.kosdaqVolume),
+    Promise.all(PEOPLE_NEWS.map(([label, query]) => newsBlock(`📰 ${label}`, query))),
+    hwaseongNewsBlock()
   ]);
 
   return `🌅 아침 브리핑\n실행 시각: ${kst()}\n\n` +
     `※ 네이버 금융 기준이며 장중 변동·지연 가능. ETF/ETN/레버리지/인버스/선물/스팩 등은 제외 시도. 투자 참고용.\n\n` +
-    `${kospiRise}\n\n${kosdaqRise}\n\n${kospiVolume}\n\n${kosdaqVolume}\n\n` +
-    `📰 관심 섹터 뉴스\n\n${ai}\n\n${bio}\n\n${material}\n\n` +
+    `${kospiVolume}\n\n${kosdaqVolume}\n\n` +
+    `🗞️ 인물별 뉴스 검색\n\n${peopleBlocks.join("\n\n")}\n\n` +
+    `${hwaseongNews}\n\n` +
     `투자 전 공식 경로에서 반드시 재확인.`;
 }
 
