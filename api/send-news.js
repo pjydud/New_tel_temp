@@ -21,15 +21,25 @@ const PEOPLE_NEWS = [
 ];
 
 const HWASEONG_POLICY_QUERIES = [
-  "화성시 민원 정책",
-  "화성시 행정 정책 시민 불편",
-  "화성시 교통 주차 민원",
-  "화성시 개발 도시계획 민원",
-  "화성시 예산 조례 정책"
+  "화성시 정책 민원",
+  "화성시의회 조례 예산",
+  "화성시청 교통 주차 민원",
+  "화성시 도시계획 개발 민원",
+  "화성시 GTX 철도 교통",
+  "화성시 반도체 산업단지 정책",
+  "정명근 화성시 정책"
+];
+
+const HWASEONG_MUST_WORDS = [
+  "화성시", "화성시청", "화성시의회", "정명근", "동탄", "봉담", "향남", "병점", "남양"
+];
+
+const HWASEONG_POLICY_WORDS = [
+  "민원", "정책", "예산", "조례", "도시계획", "교통", "주차", "개발", "철도", "GTX", "산업단지", "반도체", "행정", "도로", "주민", "시민", "의회", "시청"
 ];
 
 const EXCLUDE_NEWS_WORDS = [
-  "봉사", "자원봉사", "MOU", "업무협약", "협약식", "기부", "후원", "나눔", "캠페인", "행사 개최"
+  "봉사", "자원봉사", "MOU", "업무협약", "협약식", "기부", "후원", "나눔", "캠페인", "행사 개최", "축제", "장학금", "전달식", "기념식"
 ];
 
 function kst() {
@@ -114,12 +124,12 @@ function kstMidnightUtcMs(offsetDays = 0) {
   return Date.UTC(year, month - 1, day + offsetDays, -9, 0, 0, 0);
 }
 
-function isYesterdayOrTodayKst(pubDate) {
+function isWithinKstDays(pubDate, daysBack = 7) {
   const published = Date.parse(pubDate || "");
   if (Number.isNaN(published)) return false;
-  const yesterdayStart = kstMidnightUtcMs(-1);
+  const start = kstMidnightUtcMs(-(daysBack - 1));
   const tomorrowStart = kstMidnightUtcMs(1);
-  return published >= yesterdayStart && published < tomorrowStart;
+  return published >= start && published < tomorrowStart;
 }
 
 function formatKstDateTime(pubDate) {
@@ -135,8 +145,18 @@ function formatKstDateTime(pubDate) {
   });
 }
 
+function includesAny(text, words) {
+  const upper = text.toUpperCase();
+  return words.some((word) => upper.includes(word.toUpperCase()));
+}
+
 function shouldExcludeNews(title) {
-  return EXCLUDE_NEWS_WORDS.some((word) => title.toUpperCase().includes(word.toUpperCase()));
+  return includesAny(title, EXCLUDE_NEWS_WORDS);
+}
+
+function isHwaseongPolicyNews(title) {
+  if (shouldExcludeNews(title)) return false;
+  return includesAny(title, HWASEONG_MUST_WORDS) && includesAny(title, HWASEONG_POLICY_WORDS);
 }
 
 function parseNewsItems(xml, query, limit = 1, options = {}) {
@@ -152,8 +172,9 @@ function parseNewsItems(xml, query, limit = 1, options = {}) {
     const link = clean((linkMatch && linkMatch[1]) || newsSearchUrl(query));
 
     if (!title) continue;
-    if (options.recentOnly && !isYesterdayOrTodayKst(pubDate)) continue;
+    if (options.daysBack && !isWithinKstDays(pubDate, options.daysBack)) continue;
     if (options.excludeSoftNews && shouldExcludeNews(title)) continue;
+    if (options.hwaseongPolicyOnly && !isHwaseongPolicyNews(title)) continue;
 
     items.push({ title, link, pubDate });
     if (items.length >= limit) break;
@@ -165,7 +186,7 @@ async function personNewsBlock(label, query) {
   try {
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
     const xml = await getText(url, "utf-8");
-    const items = parseNewsItems(xml, query, 1, { recentOnly: true });
+    const items = parseNewsItems(xml, query, 1, { daysBack: 7 });
     if (!items.length) return "";
     const item = items[0];
     return `📰 ${label}\n- ${item.title}\n  작성일: ${formatKstDateTime(item.pubDate)}\n  ${item.link}`;
@@ -177,15 +198,22 @@ async function personNewsBlock(label, query) {
 async function fetchHwaseongPolicyNews() {
   const collected = [];
   const seenLinks = new Set();
+  const seenTitles = new Set();
 
   for (const query of HWASEONG_POLICY_QUERIES) {
     try {
       const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
       const xml = await getText(url, "utf-8");
-      const items = parseNewsItems(xml, query, 5, { recentOnly: true, excludeSoftNews: true });
+      const items = parseNewsItems(xml, query, 10, {
+        daysBack: 7,
+        excludeSoftNews: true,
+        hwaseongPolicyOnly: true
+      });
       for (const item of items) {
-        if (seenLinks.has(item.link)) continue;
+        const titleKey = item.title.replace(/\s+/g, "").slice(0, 40);
+        if (seenLinks.has(item.link) || seenTitles.has(titleKey)) continue;
         seenLinks.add(item.link);
+        seenTitles.add(titleKey);
         collected.push(item);
       }
     } catch (error) {
@@ -200,7 +228,7 @@ async function fetchHwaseongPolicyNews() {
 async function hwaseongNewsBlock() {
   const items = await fetchHwaseongPolicyNews();
   if (!items.length) return "";
-  return "🏙️ 화성시 민원·정책 주요뉴스\n" + items.map((x, i) => {
+  return "🏙️ 화성시 민원·정책 주요뉴스\n최근 7일 / 화성시·화성시의회·시정 관련 기사만 표시\n" + items.map((x, i) => {
     return `${i + 1}. ${x.title}\n   작성일: ${formatKstDateTime(x.pubDate)}\n   ${x.link}`;
   }).join("\n");
 }
@@ -224,7 +252,7 @@ async function buildMessage() {
   ]);
 
   const peopleBlocks = peopleBlocksRaw.filter(Boolean);
-  const peopleSection = peopleBlocks.length ? `🗞️ 인물별 최근 뉴스\n어제·오늘 작성 기사만 표시\n\n${peopleBlocks.join("\n\n")}\n\n` : "";
+  const peopleSection = peopleBlocks.length ? `🗞️ 인물별 최근 뉴스\n최근 7일 작성 기사만 표시\n\n${peopleBlocks.join("\n\n")}\n\n` : "";
   const hwaseongSection = hwaseongNews ? `${hwaseongNews}\n\n` : "";
 
   return `🌅 아침 브리핑\n실행 시각: ${kst()}\n\n` +
