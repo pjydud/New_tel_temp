@@ -60,7 +60,15 @@ async function fetchHwaseongPolicyNews() { const collected = []; const seenLinks
 async function hwaseongNewsBlock() { const items = await fetchHwaseongPolicyNews(); if (!items.length) return ""; return "🏙️ 화성시 민원·정책 주요뉴스\n최근 7일 / 화성시·화성시의회·시정 관련 기사만 표시\n" + items.map((x, i) => `${i + 1}. ${articleLink(x.title, x.link)}\n   작성일: ${formatKstDateTime(x.pubDate)}`).join("\n"); }
 
 function envName(a, b, c = "") { return a + b + c; }
-async function sendTelegram(text) { const key1 = envName("TEL", "EGRAM_", "BOT_TOKEN"); const key2 = envName("TEL", "EGRAM_", "CHAT_ID"); const url = ["https://api.", "telegram.org/", "bot", process.env[key1], "/sendMessage"].join(""); const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: process.env[key2], text, parse_mode: "HTML", disable_web_page_preview: true }) }); if (!response.ok) throw new Error(await response.text()); }
+function getTelegramChatIds() {
+  const keySingle = envName("TEL", "EGRAM_", "CHAT_ID");
+  const keyMulti = envName("TEL", "EGRAM_", "CHAT_IDS");
+  const defaults = [process.env[keySingle], "-5595644220"];
+  const raw = process.env[keyMulti] || defaults.filter(Boolean).join(",");
+  return [...new Set(raw.split(",").map((x) => x.trim()).filter(Boolean))];
+}
+async function sendTelegramToChat(text, chatId) { const key1 = envName("TEL", "EGRAM_", "BOT_TOKEN"); const url = ["https://api.", "telegram.org/", "bot", process.env[key1], "/sendMessage"].join(""); const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true }) }); if (!response.ok) throw new Error(`chat ${chatId}: ${await response.text()}`); }
+async function sendTelegram(text) { const chatIds = getTelegramChatIds(); if (!chatIds.length) throw new Error("Missing Telegram chat id"); await Promise.all(chatIds.map((chatId) => sendTelegramToChat(text, chatId))); return chatIds; }
 
 async function buildMessage() {
   const [kospiVolume, kosdaqVolume, peopleBlocksRaw, hwaseongNews] = await Promise.all([stockBlock("💰 코스피 거래상위 TOP5", SOURCES.kospiVolume), stockBlock("💰 코스닥 거래상위 TOP5", SOURCES.kosdaqVolume), Promise.all(PEOPLE_NEWS.map((person) => personNewsBlock(person))), hwaseongNewsBlock()]);
@@ -70,4 +78,4 @@ async function buildMessage() {
   return `🌅 아침 브리핑\n실행 시각: ${kst()}\n\n` + `※ 네이버 금융 기준이며 장중 변동·지연 가능. ETF/ETN/레버리지/인버스/선물/스팩 등은 제외 시도. 투자 참고용.\n\n` + `${kospiVolume}\n\n${kosdaqVolume}\n\n` + peopleSection + hwaseongSection + `뉴스는 구글 뉴스 RSS 기준이며, 같은 이름의 다른 인물이 포함될 수 있으니 기사 원문에서 확인하세요. 투자 전 공식 경로에서 반드시 재확인.`;
 }
 
-export default async function handler(req, res) { try { const key1 = envName("TEL", "EGRAM_", "BOT_TOKEN"); const key2 = envName("TEL", "EGRAM_", "CHAT_ID"); if (!process.env[key1] || !process.env[key2]) throw new Error("Missing Telegram environment variables"); const message = await buildMessage(); await sendTelegram(message); res.status(200).json({ ok: true, sent: true }); } catch (error) { console.error(error); res.status(500).json({ ok: false, error: error.message }); } }
+export default async function handler(req, res) { try { const key1 = envName("TEL", "EGRAM_", "BOT_TOKEN"); if (!process.env[key1]) throw new Error("Missing Telegram bot token"); const message = await buildMessage(); const sentChatIds = await sendTelegram(message); res.status(200).json({ ok: true, sent: true, chat_ids: sentChatIds }); } catch (error) { console.error(error); res.status(500).json({ ok: false, error: error.message }); } }
