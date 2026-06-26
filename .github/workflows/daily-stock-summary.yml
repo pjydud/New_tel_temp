@@ -2,9 +2,12 @@ name: Daily Stock Summary
 
 on:
   schedule:
-    # 23:10 UTC = 08:10 KST
-    - cron: "10 23 * * *"
+    # 00:10 UTC = 09:10 KST
+    - cron: "10 0 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   send-stock-summary:
@@ -24,9 +27,21 @@ jobs:
 
       - name: Send stock summary to Telegram
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          STOCK_WATCHLIST: ${{ vars.STOCK_WATCHLIST || 'KOSPI,KOSDAQ,삼성전자,SK하이닉스,NVIDIA,AMD,TSLA,BTC' }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          STOCK_TOP_N: ${{ vars.STOCK_TOP_N || '5' }}
+          STOCK_LOOKBACK_DAYS: ${{ vars.STOCK_LOOKBACK_DAYS || '7' }}
+          STOCK_RUN_TIME_LABEL: "09:10"
         run: python send_stock_summary.py
+
+      - name: Commit volume snapshot
+        run: |
+          if [ -n "$(git status --porcelain data/volume_snapshots.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/volume_snapshots.json
+            git commit -m "Update 09:10 stock volume snapshot"
+            git push
+          else
+            echo "No snapshot changes to commit."
+          fi
