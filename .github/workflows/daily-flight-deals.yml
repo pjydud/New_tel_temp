@@ -1,9 +1,6 @@
 name: Daily Flight Deals
 
 on:
-  schedule:
-    # 23:00 UTC = 08:00 KST
-    - cron: "0 23 * * *"
   workflow_dispatch:
 
 jobs:
